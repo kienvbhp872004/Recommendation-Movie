@@ -23,32 +23,31 @@ class MovieDataset(Dataset):
 
 
 def preprocess_sequences(path, min_seq_len=4):
-
     df = pd.read_csv(path, dtype={'user_id': str, 'movie_id': str})
-
-    # sort theo user + timestamp
     df = df.sort_values(['user_id', 'ts'])
 
-    # ánh xạ user và movie
     unique_users = df['user_id'].unique()
     user2idx = {uid: idx for idx, uid in enumerate(unique_users)}
     idx2user = {idx: uid for uid, idx in user2idx.items()}
 
     unique_movies = df['movie_id'].unique()
-    movie2idx = {mid: idx+1 for idx, mid in enumerate(unique_movies)}  # reserve 0 cho padding
+    movie2idx = {mid: idx+1 for idx, mid in enumerate(unique_movies)}
     idx2movie = {idx: mid for mid, idx in movie2idx.items()}
 
-    # group theo user và chuyển thành idx
+    from collections import defaultdict
     user_sequences = defaultdict(list)
     for _, row in df.iterrows():
         uid = row['user_id']
         mid = row['movie_id']
         user_sequences[uid].append(movie2idx[mid])
 
-    # lọc sequence quá ngắn
     sequences = [seq for seq in user_sequences.values() if len(seq) >= min_seq_len]
 
-    return sequences, movie2idx, idx2movie, user2idx, idx2user
+    # NEW: full history for inference
+    user_history = {uid: seq for uid, seq in user_sequences.items()}
+
+    return sequences, movie2idx, idx2movie, user2idx, idx2user, user_history
+
 
 
 def train_val_split(sequences, val_ratio=0.2, random_state=42):
