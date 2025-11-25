@@ -16,8 +16,8 @@ class BERT4Rec(nn.Module):
         self.fc = nn.Linear(embedding_dim, vocab_size)
 
 
-def forward(self, x):
-    x_emb = self.embedding(x)
-    x_enc = self.encoder(x_emb)
-    logits = self.fc(x_enc)
-    return logits
+    def forward(self, x):
+        x_emb = self.embedding(x)
+        x_enc = self.encoder(x_emb)
+        logits = self.fc(x_enc)
+        return logits

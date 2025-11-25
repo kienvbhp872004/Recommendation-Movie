@@ -1,23 +1,20 @@
 ﻿model:
-vocab_size: 37000
-embedding_dim: 64
-hidden_dim: 128
-max_seq_len: 50
-num_layers: 2
-num_heads: 2
-
-
+  vocab_size: 37000
+  embedding_dim: 64
+  hidden_dim: 128
+  max_seq_len: 50
+  num_layers: 2
+  num_heads: 2
 train:
-batch_size: 128
-epochs: 10
-lr: 1e-3
-val_ratio: 0.1
+  batch_size: 128
+  epochs: 20
+  lr: 0.001
+  val_ratio: 0.1
 
 
 callbacks:
-early_stopping_patience: 3
-checkpoint_path: checkpoints/bert4rec_best.pth
-
+  early_stopping_patience: 3
+  checkpoint_path: checkpoints/bert4rec_best.pth
 
 data:
-input_path: data/processed/train_sequences.csv
+  input_path: D:\Repo\Recommendation-Movie\data\raw\merged_data_processed.csv

@@ -1,1 +1,3 @@
 ﻿.venv
+.data/raw/merged_data_processed.csv
+.data/raw/submission.csv

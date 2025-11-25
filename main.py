@@ -1,54 +1,72 @@
-﻿import torch
+﻿# main.py
+import os
+import torch
 from torch.utils.data import DataLoader
 
 from src.utils.config import load_config
 from src.utils.gpu import get_device
 from src.datasets.dataloader import MovieDataset
-from src.datasets.preprocess import load_sequences
-from src.datasets.split import train_val_split
+from src.datasets.dataloader import preprocess_sequences, get_dataloaders
 from src.models.recommender import BERT4Rec
 from src.train.trainer import Trainer
 from src.train.callbacks import EarlyStopping
+from src.utils.visualize import plot_loss, plot_metrics
 
-# Load config và device
-config = load_config('config.yaml')
-device = get_device()
+def main():
+    # --- Load config + device ---
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(BASE_DIR, 'config.yaml')
+    config = load_config(config_path)
+    device = get_device()
+    print("Using device:", device)
 
-# Load sequences và split train/val
-sequences = load_sequences(config['data']['input_path'])
-train_seq, val_seq = train_val_split(sequences, config['train']['val_ratio'])
-
-# DataLoader
-train_loader = DataLoader(
-    MovieDataset(train_seq, config['model']['max_seq_len']),
-    batch_size=config['train']['batch_size'],
-    shuffle=True
-)
-val_loader = DataLoader(
-    MovieDataset(val_seq, config['model']['max_seq_len']),
-    batch_size=config['train']['batch_size']
-)
-
-# Model
-model = BERT4Rec(
-    vocab_size=config['model']['vocab_size'],
-    embedding_dim=config['model']['embedding_dim'],
-    max_seq_len=config['model']['max_seq_len'],
-    num_layers=config['model']['num_layers'],
-    num_heads=config['model']['num_heads'],
-    hidden_dim=config['model']['hidden_dim']
-).to(device)
-
-# Optimizer, criterion, callbacks
-optimizer = torch.optim.Adam(model.parameters(), lr=config['train']['lr'])
-criterion = torch.nn.CrossEntropyLoss()
-callbacks = [
-    EarlyStopping(
-        patience=config['callbacks']['early_stopping_patience'],
-        save_path=config['callbacks']['checkpoint_path']
+    # --- Load sequences và split train/val ---
+    sequences, movie2idx, idx2movie, user2idx, idx2user = preprocess_sequences(
+        config['data']['input_path']
     )
-]
 
-# Trainer
-trainer = Trainer(model, optimizer, criterion, callbacks)
-trainer.fit(train_loader, val_loader, config['train']['epochs'], device)
+    train_loader, val_loader = get_dataloaders(
+        sequences,
+        max_seq_len=config['model']['max_seq_len'],
+        batch_size=config['train']['batch_size'],
+        val_ratio=config['train']['val_ratio']
+    )
+
+    # --- Model ---
+    model = BERT4Rec(
+        vocab_size=config['model']['vocab_size'],
+        embedding_dim=config['model']['embedding_dim'],
+        max_seq_len=config['model']['max_seq_len'],
+        num_layers=config['model']['num_layers'],
+        num_heads=config['model']['num_heads'],
+        hidden_dim=config['model']['hidden_dim']
+    ).to(device)
+
+    # --- Optimizer, criterion, callbacks ---
+    optimizer = torch.optim.Adam(model.parameters(), lr=float(config['train']['lr']))
+    criterion = torch.nn.CrossEntropyLoss()
+    callbacks = [
+        EarlyStopping(
+            patience=config['callbacks']['early_stopping_patience'],
+            save_path=config['callbacks']['checkpoint_path']
+        )
+    ]
+
+    # --- Trainer ---
+    trainer = Trainer(model, optimizer, criterion, callbacks)
+    trainer.fit(train_loader, val_loader, config['train']['epochs'], device)
+
+    # --- Visualize results ---
+    print("Plotting loss curve...")
+    plot_loss(trainer.history['train_loss'], trainer.history['val_loss'],
+              save_path=os.path.join(BASE_DIR, 'loss_curve.png'))
+
+    # Nếu Trainer lưu thêm metrics, plot luôn
+    metrics_keys = ('precision@5', 'recall@5', 'ndcg@5')
+    if all(k in trainer.history for k in metrics_keys):
+        print("Plotting metrics...")
+        plot_metrics(trainer.history, keys=metrics_keys,
+                     save_path=os.path.join(BASE_DIR, 'metrics.png'))
+
+if __name__ == '__main__':
+    main()
