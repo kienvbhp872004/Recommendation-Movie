@@ -18,11 +18,12 @@ def main():
     config_path = os.path.join(BASE_DIR, 'config.yaml')
     config = load_config(config_path)
     device = get_device()
+    data_path = os.path.join(BASE_DIR, config['data']['input_path'])
     print("Using device:", device)
 
     # --- Load sequences + user history ---
     sequences, movie2idx, idx2movie, user2idx, idx2user, user_history = preprocess_sequences(
-        config['data']['input_path']
+        data_path
     )
 
     # --- DataLoader ---

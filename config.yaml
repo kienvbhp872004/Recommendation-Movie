@@ -17,4 +17,4 @@ callbacks:
   checkpoint_path: checkpoints/bert4rec_best.pth
 
 data:
-  input_path: D:\Workspace\Github\Repo\Recommendation-Movie\Recommendation-Movie\data\raw\merged_data_processed.csv
+  input_path: data\raw\merged_data_processed.csv
