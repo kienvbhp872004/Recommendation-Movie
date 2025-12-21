@@ -4,5 +4,3 @@ from os.path import abspath
 def getpath() :
     path = abspath(__file__).replace("path.py", "")
     return path
-print(getpath())
-print(1)
