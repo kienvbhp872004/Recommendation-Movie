@@ -7,7 +7,7 @@ from sentence_transformers import SentenceTransformer
 from src.utils.config import load_config
 from src.utils.gpu import get_device
 from src.datasets.dataloader import preprocess_sequences, get_dataloaders
-from src.models.recommender import BERT4Rec
+from src.models.recommender import BERT4Rec, SASRec
 from src.train.trainer import Trainer
 from src.train.callbacks import EarlyStopping
 from src.utils.visualize import plot_loss, plot_metrics
@@ -44,7 +44,8 @@ def main():
 
     # ================= PREPROCESS =================
     (
-        sequences,
+        train_sequences,
+        val_sequences,
         movie2idx,
         idx2movie,
         user2idx,
@@ -55,6 +56,10 @@ def main():
 
     vocab_size = max(movie2idx.values()) + 1
 
+    print(f"\n[INFO] Vocab size: {vocab_size}")
+    print(f"[INFO] Train sequences: {len(train_sequences)}")
+    print(f"[INFO] Val sequences: {len(val_sequences)}")
+
     # ================= TEXT EMBEDDING =================
     pretrained_text_emb = build_text_embedding(
         movie_descriptions,
@@ -64,23 +69,45 @@ def main():
 
     # ================= DATALOADER =================
     train_loader, val_loader = get_dataloaders(
-        sequences,
+        train_sequences=train_sequences,
+        val_sequences=val_sequences,
         max_seq_len=config['model']['max_seq_len'],
         batch_size=config['train']['batch_size'],
-        val_ratio=config['train']['val_ratio']
+        model_type=config['model']['type']  # "bert" hoặc "sasrec"
     )
 
     # ================= MODEL =================
-    model = BERT4Rec(
-        vocab_size=vocab_size,
-        embedding_dim=config['model']['embedding_dim'],
-        max_seq_len=config['model']['max_seq_len'],
-        num_layers=config['model']['num_layers'],
-        num_heads=config['model']['num_heads'],
-        hidden_dim=config['model']['hidden_dim'],
-        text_emb_dim=pretrained_text_emb.size(1),
-        pretrained_text_emb=pretrained_text_emb
-    ).to(device)
+    model_type = config['model']['type']
+
+    if model_type == "bert":
+        model = BERT4Rec(
+            vocab_size=vocab_size,
+            embedding_dim=config['model']['embedding_dim'],
+            max_seq_len=config['model']['max_seq_len'],
+            num_layers=config['model']['num_layers'],
+            num_heads=config['model']['num_heads'],
+            hidden_dim=config['model']['hidden_dim'],
+            text_emb_dim=pretrained_text_emb.size(1),
+            pretrained_text_emb=pretrained_text_emb
+        ).to(device)
+
+    elif model_type == "sasrec":
+        model = SASRec(
+            vocab_size=vocab_size,
+            embedding_dim=config['model']['embedding_dim'],
+            max_seq_len=config['model']['max_seq_len'],
+            num_heads=config['model']['num_heads'],
+            num_layers=config['model']['num_layers'],
+            dropout=config['model'].get('dropout', 0.2),
+            text_emb_dim=pretrained_text_emb.size(1),
+            pretrained_text_emb=pretrained_text_emb
+        ).to(device)
+
+    else:
+        raise ValueError("model.type must be 'bert' or 'sasrec'")
+
+    print(f"\n[INFO] Model: {model_type.upper()}")
+    print(f"[INFO] Total parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # ================= OPTIMIZER / LOSS / CALLBACKS =================
     optimizer = torch.optim.Adam(
@@ -88,7 +115,8 @@ def main():
         lr=float(config['train']['lr'])
     )
 
-    criterion = torch.nn.CrossEntropyLoss()
+    # ✅ Ignore padding token (0) trong loss
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
 
     callbacks = [
         EarlyStopping(
@@ -98,7 +126,14 @@ def main():
     ]
 
     # ================= TRAIN =================
-    trainer = Trainer(model, optimizer, criterion, callbacks)
+    trainer = Trainer(
+        model=model,
+        optimizer=optimizer,
+        criterion=criterion,
+        model_type=config['model']['type'],
+        callbacks=callbacks
+    )
+
     trainer.fit(
         train_loader,
         val_loader,
@@ -107,7 +142,7 @@ def main():
     )
 
     # ================= VISUALIZATION =================
-    print("Plotting loss curve...")
+    print("\nPlotting loss curve...")
     plot_loss(
         trainer.history['train_loss'],
         trainer.history['val_loss'],
@@ -131,7 +166,8 @@ def main():
         movie2idx=movie2idx,
         idx2movie=idx2movie,
         max_seq_len=config['model']['max_seq_len'],
-        device=device
+        device=device,
+        model_type=config['model']['type']
     )
 
     submission_input = os.path.join(BASE_DIR, "data/raw/submission.csv")

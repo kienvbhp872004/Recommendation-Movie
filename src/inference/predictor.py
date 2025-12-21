@@ -6,12 +6,21 @@ from tqdm import tqdm
 
 
 class Predictor:
-    def __init__(self, model, movie2idx, idx2movie, max_seq_len, device):
+    def __init__(
+            self,
+            model,
+            movie2idx,
+            idx2movie,
+            max_seq_len,
+            device,
+            model_type="bert"
+    ):
         self.model = model
         self.movie2idx = movie2idx
         self.idx2movie = idx2movie
         self.max_seq_len = max_seq_len
         self.device = device
+        self.model_type = model_type
 
     def _prepare_sequence(self, seq):
         """pad/truncate sequence để feed cho model"""
@@ -21,25 +30,31 @@ class Predictor:
 
     # src/inference/predictor.py
     def predict_topk(self, history, k=5):
-        """
-        Lấy top-k movie id dự đoán từ history sequence.
-        """
         self.model.eval()
+
         seq = history[-self.max_seq_len:]
         seq = [0] * (self.max_seq_len - len(seq)) + seq
         seq_tensor = torch.tensor(seq, dtype=torch.long).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            logits = self.model(seq_tensor)  # (1, seq_len, vocab_size)
-            last_logits = logits[0, -1]  # lấy token cuối
-            probs = torch.softmax(last_logits, dim=-1)
+            logits = self.model(seq_tensor)
 
-            # loại bỏ padding idx = 0
-            probs[0] = 0.0
+            if self.model_type == "bert":
+                # BERT4Rec → (B, L, V)
+                last_logits = logits[0, -1]
+
+            elif self.model_type == "sasrec":
+                # SASRec → (B, V)
+                last_logits = logits[0]
+
+            else:
+                raise ValueError(f"Unsupported model_type: {self.model_type}")
+
+            probs = torch.softmax(last_logits, dim=-1)
+            probs[0] = 0.0  # remove padding
 
             topk = torch.topk(probs, k=k).indices.cpu().tolist()
-            movies = [self.idx2movie[i] for i in topk]
-            return movies
+            return [self.idx2movie[i] for i in topk]
 
     def predict_submission(self, submission_path, output_path, user_full_sequences):
         """
