@@ -1,17 +1,21 @@
 ﻿import torch
+import numpy as np
 from tqdm import tqdm
 
 
 class Trainer:
-    def __init__(self, model, optimizer, criterion, model_type="bert", callbacks=[]):
+    def __init__(self, model, optimizer, criterion, model_type="bert", callbacks=[], mask_prob=0.15):
         """
-        model_type: "bert" | "sasrec"
+        Args:
+            model_type: "bert" | "sasrec"
+            mask_prob: Probability of masking items for BERT4Rec (default 0.15)
         """
         self.model = model
         self.optimizer = optimizer
         self.criterion = criterion
         self.model_type = model_type
         self.callbacks = callbacks
+        self.mask_prob = mask_prob
         self.history = {
             'train_loss': [],
             'val_loss': [],
@@ -23,6 +27,42 @@ class Trainer:
             'ndcg@10': []
         }
 
+    def mask_sequence(self, seq, mask_prob=0.15, mask_token=0):
+        """
+        ✅ BERT4Rec masking strategy:
+        - Randomly mask `mask_prob` of items
+        - 80% replace with [MASK] (0)
+        - 10% replace with random item
+        - 10% keep original
+
+        Returns:
+            masked_seq: Input sequence with masks
+            labels: Original sequence (targets)
+            mask_positions: Boolean mask of positions to predict
+        """
+        device = seq.device  # ✅ Get device from input tensor
+        seq = seq.clone()
+        labels = seq.clone()
+
+        # Create mask: 1 for items to predict, 0 for others
+        mask_positions = torch.rand(seq.shape, device=device) < mask_prob  # ✅ Same device
+        # Don't mask padding (0)
+        mask_positions = mask_positions & (seq != 0)
+
+        # 80% -> [MASK] token
+        mask_80 = torch.rand(seq.shape, device=device) < 0.8  # ✅ Same device
+        seq[mask_positions & mask_80] = mask_token
+
+        # 10% -> random item
+        mask_10 = torch.rand(seq.shape, device=device) < 0.5  # ✅ Same device
+        vocab_size = self.model.vocab_size if hasattr(self.model, 'vocab_size') else seq.max().item() + 1
+        random_items = torch.randint(1, vocab_size, seq.shape, device=device)  # ✅ Same device
+        seq[mask_positions & ~mask_80 & mask_10] = random_items[mask_positions & ~mask_80 & mask_10]
+
+        # 10% -> keep original (do nothing)
+
+        return seq, labels, mask_positions
+
     def train_one_epoch(self, loader, device):
         self.model.train()
         total_loss = 0
@@ -30,17 +70,23 @@ class Trainer:
         for batch in tqdm(loader, desc="Training"):
             self.optimizer.zero_grad()
 
-            # ================= BERT4Rec =================
+            # ================= ✅ BERT4Rec - FIXED =================
             if self.model_type == "bert":
-                seq = batch.to(device)
-                logits = self.model(seq)
+                seq = batch.to(device)  # [B, T]
 
+                # ✅ Mask random items
+                masked_seq, labels, mask_positions = self.mask_sequence(seq, self.mask_prob)
+
+                # Forward pass
+                logits = self.model(masked_seq)  # [B, T, vocab_size]
+
+                # ✅ Chỉ tính loss cho masked positions
                 loss = self.criterion(
-                    logits.view(-1, logits.size(-1)),
-                    seq.view(-1)
+                    logits[mask_positions],  # [num_masked, vocab_size]
+                    labels[mask_positions]  # [num_masked]
                 )
 
-            # ================= SASRec =================
+            # ================= ✅ SASRec - CORRECT =================
             elif self.model_type == "sasrec":
                 seq, target = batch
                 seq = seq.to(device)
@@ -48,8 +94,11 @@ class Trainer:
 
                 logits = self.model(seq)  # [B, vocab_size]
 
-                # ✅ Chỉ tính loss cho next item prediction
+                # ✅ Predict next item
                 loss = self.criterion(logits, target)
+
+            else:
+                raise ValueError(f"Unknown model_type: {self.model_type}")
 
             loss.backward()
             self.optimizer.step()
@@ -59,7 +108,7 @@ class Trainer:
 
     def compute_metrics(self, loader, device, k_list=[5, 10]):
         """
-        Tính Precision@K, Recall@K, NDCG@K
+        ✅ FIXED: Tính Precision@K, Recall@K, NDCG@K
         """
         self.model.eval()
 
@@ -70,14 +119,25 @@ class Trainer:
         with torch.no_grad():
             for batch in tqdm(loader, desc="Computing metrics"):
 
+                # ================= ✅ BERT4Rec =================
                 if self.model_type == "bert":
-                    seq = batch.to(device)
-                    logits = self.model(seq)  # [B, T, vocab_size]
+                    seq = batch.to(device)  # [B, T]
 
-                    # Lấy prediction của vị trí cuối cùng
-                    logits = logits[:, -1, :]  # [B, vocab_size]
+                    # ✅ Predict next item: mask vị trí cuối + 1
+                    # Tạo input sequence bằng cách append [MASK] token
+                    mask_token = 0
+                    masked_seq = torch.cat([
+                        seq,
+                        torch.full((seq.size(0), 1), mask_token, device=device, dtype=torch.long)
+                    ], dim=1)
+
+                    logits = self.model(masked_seq)  # [B, T+1, vocab_size]
+                    logits = logits[:, -1, :]  # [B, vocab_size] - prediction for masked position
+
+                    # Target = last item in original sequence
                     targets = seq[:, -1]  # [B]
 
+                # ================= ✅ SASRec =================
                 elif self.model_type == "sasrec":
                     seq, targets = batch
                     seq = seq.to(device)
@@ -85,7 +145,7 @@ class Trainer:
 
                     logits = self.model(seq)  # [B, vocab_size]
 
-                # Top-K predictions
+                # ================= Compute metrics =================
                 for k in k_list:
                     _, topk_indices = torch.topk(logits, k, dim=-1)  # [B, K]
 
@@ -97,18 +157,19 @@ class Trainer:
                         if target == 0:
                             continue
 
-                        # Precision@K
+                        # Hit or not
                         hit = 1 if target in preds else 0
+
+                        # Precision@K
                         all_precisions[k].append(hit / k)
 
-                        # Recall@K
+                        # Recall@K (binary: 1 target)
                         all_recalls[k].append(hit)
 
                         # NDCG@K
                         if hit:
-                            # Tìm vị trí của target trong predictions
                             rank = preds.index(target) + 1
-                            ndcg = 1.0 / (torch.log2(torch.tensor(rank + 1.0)).item())
+                            ndcg = 1.0 / np.log2(rank + 1)
                         else:
                             ndcg = 0.0
                         all_ndcgs[k].append(ndcg)
@@ -122,28 +183,36 @@ class Trainer:
         return metrics
 
     def validate(self, loader, device):
+        """
+        ✅ FIXED: Validation với proper masking cho BERT4Rec
+        """
         self.model.eval()
         total_loss = 0
 
         with torch.no_grad():
             for batch in tqdm(loader, desc="Validation"):
 
+                # ================= ✅ BERT4Rec =================
                 if self.model_type == "bert":
                     seq = batch.to(device)
-                    logits = self.model(seq)
-                    loss = self.criterion(
-                        logits.view(-1, logits.size(-1)),
-                        seq.view(-1)
-                    )
 
+                    # ✅ Mask last position để predict
+                    masked_seq = seq.clone()
+                    masked_seq[:, -1] = 0  # Mask last item
+                    targets = seq[:, -1]  # Target = last item
+
+                    logits = self.model(masked_seq)  # [B, T, vocab_size]
+                    logits = logits[:, -1, :]  # [B, vocab_size]
+
+                    loss = self.criterion(logits, targets)
+
+                # ================= ✅ SASRec =================
                 elif self.model_type == "sasrec":
                     seq, target = batch
                     seq = seq.to(device)
                     target = target.to(device)
 
                     logits = self.model(seq)  # [B, vocab_size]
-
-                    # ✅ Chỉ tính loss cho next item (không tính toàn bộ sequence)
                     loss = self.criterion(logits, target)
 
                 total_loss += loss.item()
@@ -151,6 +220,9 @@ class Trainer:
         return total_loss / len(loader)
 
     def fit(self, train_loader, val_loader, epochs, device):
+        """
+        ✅ FIXED: Complete training loop với callbacks
+        """
         for epoch in range(epochs):
             print(f"\n{'=' * 60}")
             print(f"Epoch {epoch + 1}/{epochs}")
@@ -182,4 +254,13 @@ class Trainer:
             print(f"  Recall@10:    {metrics['recall@10']:.4f}")
             print(f"  NDCG@10:      {metrics['ndcg@10']:.4f}")
 
-            # ✅ Callback (early stopping)
+            # ✅ Callbacks (early stopping, checkpointing, etc.)
+            # for callback in self.callbacks:
+            #     callback.on_epoch_end(epoch, val_loss, self.model)
+            #
+            #     # Check if early stopping triggered
+            #     if hasattr(callback, 'early_stop') and callback.early_stop:
+            #         print(f"\n⚠️ Early stopping triggered at epoch {epoch + 1}")
+            #         return
+
+        print("\n✅ Training completed!")

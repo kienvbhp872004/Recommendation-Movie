@@ -42,10 +42,11 @@ def main():
 
     data_path = os.path.join(BASE_DIR, config['data']['input_path'])
 
-    # ================= PREPROCESS =================
+    # ================= ✅ FIXED: PREPROCESS =================
     (
         train_sequences,
-        val_sequences,
+        val_input_sequences,  # ✅ Changed from val_sequences
+        val_targets,          # ✅ New: validation targets
         movie2idx,
         idx2movie,
         user2idx,
@@ -58,7 +59,7 @@ def main():
 
     print(f"\n[INFO] Vocab size: {vocab_size}")
     print(f"[INFO] Train sequences: {len(train_sequences)}")
-    print(f"[INFO] Val sequences: {len(val_sequences)}")
+    print(f"[INFO] Val sequences: {len(val_input_sequences)}")
 
     # ================= TEXT EMBEDDING =================
     pretrained_text_emb = build_text_embedding(
@@ -67,10 +68,11 @@ def main():
         device=device
     )
 
-    # ================= DATALOADER =================
+    # ================= ✅ FIXED: DATALOADER =================
     train_loader, val_loader = get_dataloaders(
         train_sequences=train_sequences,
-        val_sequences=val_sequences,
+        val_input_sequences=val_input_sequences,  # ✅ Changed
+        val_targets=val_targets,                  # ✅ New parameter
         max_seq_len=config['model']['max_seq_len'],
         batch_size=config['train']['batch_size'],
         model_type=config['model']['type']  # "bert" hoặc "sasrec"

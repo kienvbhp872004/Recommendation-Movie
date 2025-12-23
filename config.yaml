@@ -1,4 +1,5 @@
 ﻿model:
+  type: sasrec     # bert | sasrec
   vocab_size: 37000
   embedding_dim: 64
   hidden_dim: 128
@@ -7,9 +8,9 @@
   num_heads: 2
 train:
   batch_size: 128
-  epochs: 20
+  epochs: 200
   lr: 0.001
-  val_ratio: 0.1
+  val_ratio: 0.3
 
 
 callbacks:
